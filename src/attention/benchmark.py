@@ -21,5 +21,19 @@ def benchmark_attention(fn, B=1, H=8, seq_lens=[128, 256, 512, 1024], d= 64, n_r
           return results
 
 if __name__ == "__main__":
-          from standard_attention import standard_attention
-          results=benchmark_attention(standard_attention)
+    from src.attention.standard_attention import standard_attention
+    from src.attention.flash_attention import flash_attention_forward
+    from src.metal.metal_wrapper import metal_flash_attention
+    
+    print("=== Standard Attention ===")
+    std_results = benchmark_attention(standard_attention)
+    
+    print("\n=== Flash Attention ===")
+    flash_results = benchmark_attention(flash_attention_forward)
+    print("\n=== Metal Kernel ===")
+    metal_results = benchmark_attention(metal_flash_attention)
+    
+    print("\n=== Speedup ===")
+    for N in std_results:
+        metal_speedup = std_results[N]['time_ms'] / metal_results[N]['time_ms']
+        print(f"N={N:5d}: {metal_speedup:.2f}x faster")
