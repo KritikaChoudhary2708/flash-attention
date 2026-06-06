@@ -4,6 +4,7 @@ from src.attention.online_softmax import online_softmax_attention
 from src.attention.flash_attention import flash_attention_forward
 from src.metal.metal_wrapper import metal_flash_attention
 from src.metal.simd_wrapper import metal_flash_attention_simd
+from src.metal.hybrid_wrapper import metal_flash_attention_hybrid
 
 def validate(N=64, d=64, tolerance=1e-4):
           Q = mx.random.normal((N, d))
@@ -61,9 +62,22 @@ def validate_metal_simd(N=512, d=64, n_heads=8, tol=1e-2):
     print(f'SIMD Metal kernel max difference: {diff:.2e}')
     print('PASS' if diff < tol else 'FAIL')
 
+def validate_metal_hybrid(N=512, d=64, n_heads=8, tol=1e-2):
+    Q = mx.random.normal((1, n_heads, N, d))
+    K = mx.random.normal((1, n_heads, N, d))
+    V = mx.random.normal((1, n_heads, N, d))
+
+    std_out = standard_attention(Q, K, V)
+    hybrid_out = metal_flash_attention_hybrid(Q, K, V)
+    mx.eval(std_out, hybrid_out)
+
+    diff = float(mx.abs(std_out - hybrid_out).max())
+    print(f'Hybrid Metal kernel max difference: {diff:.2e}')
+    print('PASS' if diff < tol else 'FAIL')
+
 if __name__ == "__main__":
           validate()
           validate_flash()
           validate_metal()
           validate_metal_simd()
-          
+          validate_metal_hybrid(N=8, d=64, n_heads=1)
