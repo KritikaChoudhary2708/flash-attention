@@ -24,7 +24,7 @@ if __name__ == "__main__":
     from src.attention.standard_attention import standard_attention
     from src.attention.flash_attention import flash_attention_forward
     from src.metal.metal_wrapper import metal_flash_attention
-    
+    from src.metal.simd_wrapper import metal_flash_attention_simd
     print("=== Standard Attention ===")
     std_results = benchmark_attention(standard_attention)
     
@@ -32,8 +32,11 @@ if __name__ == "__main__":
     flash_results = benchmark_attention(flash_attention_forward)
     print("\n=== Metal Kernel ===")
     metal_results = benchmark_attention(metal_flash_attention)
-    
+    print("\n=== SIMD Metal Kernel ===")
+    simd_results = benchmark_attention(metal_flash_attention_simd)
     print("\n=== Speedup ===")
     for N in std_results:
         metal_speedup = std_results[N]['time_ms'] / metal_results[N]['time_ms']
         print(f"N={N:5d}: {metal_speedup:.2f}x faster")
+        simd_speedup = std_results[N]['time_ms'] / simd_results[N]['time_ms']
+        print(f"N={N:5d}: {simd_speedup:.2f}x faster")
