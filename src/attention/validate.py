@@ -6,6 +6,7 @@ from src.metal.metal_wrapper import metal_flash_attention
 from src.metal.simd_wrapper import metal_flash_attention_simd
 from src.metal.hybrid_wrapper import metal_flash_attention_hybrid
 from src.metal.hybrid_shuffle_wrapper import metal_flash_attention_hybrid_shuffle
+from src.metal.hybrid_shuffle_parallel_o_wrapper import metal_flash_attention_hybrid_shuffle_parallel_o
 
 def validate(N=64, d=64, tolerance=1e-4):
           Q = mx.random.normal((N, d))
@@ -89,6 +90,19 @@ def validate_metal_hybrid_shuffle(N=512, d=64, n_heads=8, tol=1e-2):
     print(f'Hybrid Metal Shuffle kernel max difference: {diff:.2e}')
     print('PASS' if diff < tol else 'FAIL')
 
+def validate_metal_hybrid_shuffle_parallel_o(N=512, d=64, n_heads=8, tol=1e-2):
+    Q = mx.random.normal((1, n_heads, N, d))
+    K = mx.random.normal((1, n_heads, N, d))
+    V = mx.random.normal((1, n_heads, N, d))
+
+    std_out = standard_attention(Q, K, V)
+    hybrid_shuffle_out = metal_flash_attention_hybrid_shuffle_parallel_o(Q, K, V)
+    mx.eval(std_out, hybrid_shuffle_out)
+
+    diff = float(mx.abs(std_out - hybrid_shuffle_out).max())
+    print(f'Hybrid Metal Shuffle Parallel O kernel max difference: {diff:.2e}')
+    print('PASS' if diff < tol else 'FAIL')
+
 if __name__ == "__main__":
           validate()
           validate_flash()
@@ -96,3 +110,4 @@ if __name__ == "__main__":
           validate_metal_simd()
           validate_metal_hybrid(N=8, d=64, n_heads=1)
           validate_metal_hybrid_shuffle(N=8, d=64, n_heads=1)
+          validate_metal_hybrid_shuffle_parallel_o(N=8, d=64, n_heads=1)

@@ -27,6 +27,7 @@ if __name__ == "__main__":
     from src.metal.simd_wrapper import metal_flash_attention_simd
     from src.metal.hybrid_wrapper import metal_flash_attention_hybrid
     from src.metal.hybrid_shuffle_wrapper import metal_flash_attention_hybrid_shuffle
+    from src.metal.hybrid_shuffle_parallel_o_wrapper import metal_flash_attention_hybrid_shuffle_parallel_o
 
     print("=== Standard Attention ===")
     std_results = benchmark_attention(standard_attention)
@@ -41,6 +42,8 @@ if __name__ == "__main__":
     hybrid_results = benchmark_attention(metal_flash_attention_hybrid)
     print("\n=== Hybrid Metal Shuffle Kernel ===")
     hybrid_shuffle_results = benchmark_attention(metal_flash_attention_hybrid_shuffle)
+    print("\n=== Hybrid Metal Shuffle Parallel O Kernel ===")
+    hybrid_shuffle_parallel_o_results = benchmark_attention(metal_flash_attention_hybrid_shuffle_parallel_o)
     
     print("\n=== Speedup ===")
     for N in std_results:
@@ -52,3 +55,5 @@ if __name__ == "__main__":
         print(f"N={N:5d}: {hybrid_speedup:.2f}x faster")
         hybrid_shuffle_speedup = std_results[N]['time_ms'] / hybrid_shuffle_results[N]['time_ms']
         print(f"N={N:5d}: {hybrid_shuffle_speedup:.2f}x faster")
+        hybrid_shuffle_parallel_o_speedup = std_results[N]['time_ms'] / hybrid_shuffle_parallel_o_results[N]['time_ms']
+        print(f"N={N:5d}: {hybrid_shuffle_parallel_o_speedup:.2f}x faster")
