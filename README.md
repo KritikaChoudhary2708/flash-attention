@@ -1,120 +1,184 @@
-# FlashAttention on Apple Silicon (MLX & Metal)
+# Flash Attention on Apple Silicon using MLX and Metal
 
-This repository contains custom implementations of **FlashAttention** and **Online Softmax** on Apple Silicon GPUs, built using Apple's [MLX library](https://github.com/ml-explore/mlx) and custom **Metal (MSL)** compute shaders. 
+This project implements and optimizes Flash Attention on Apple Silicon using MLX and custom Metal kernels.
 
-It contains standard dot-product attention, online softmax attention, a python-based block FlashAttention, and three custom Metal shaders showing different levels of GPU optimization (Naive, SIMD-group, and Hybrid).
+The goal was not only to implement attention, but to understand how memory movement, tiling, online softmax, SIMD lanes, reductions, broadcasts, and GPU thread mapping affect real performance.
 
----
+I started with standard attention in MLX, then implemented tiled Flash Attention with online softmax, moved the computation into custom Metal kernels, and progressively optimized the kernel through measured experiments.
 
-## 📂 Project Structure
+The best custom kernel improved from 874.56 ms to 88.47 ms at sequence length 1024, giving around a 9.89x speedup over my original hybrid Metal kernel.
 
-- 💾 `src/`
-  - 📂 `attention/`
-    - [standard_attention.py](src/attention/standard_attention.py): Baseline attention implementation using standard matrix multiplications and a global softmax.
-    - [online_softmax.py](src/attention/online_softmax.py): Incremental online softmax attention that avoids materializing the full $N \times N$ attention matrix.
-    - [flash_attention.py](src/attention/flash_attention.py): Tiled, block-based Python implementation of FlashAttention.
-    - [validate.py](src/attention/validate.py): Correctness validation suite comparing all custom implementations against standard attention.
-    - [benchmark.py](src/attention/benchmark.py): Speed and memory benchmarking script.
-    - [roofline.py](src/attention/roofline.py): Analytical roofline modeling and visualization scripts.
-  - 📂 `metal/`
-    - [flash_attention_mlx.metal](src/metal/flash_attention_mlx.metal): Naive custom Metal shader for block-based attention.
-    - [metal_wrapper.py](src/metal/metal_wrapper.py): Python loader for the naive Metal kernel using `mlx.fast.metal_kernel`.
-    - [flash_attention_simd.metal](src/metal/flash_attention_simd.metal): Metal shader optimized using SIMD-groups (`simd_sum`) for parallelizing query dimension computations.
-    - [simd_wrapper.py](src/metal/simd_wrapper.py): Python wrapper for the SIMD-optimized Metal kernel.
-    - [flash_attention_hybrid.metal](src/metal/flash_attention_hybrid.metal): Hybrid Metal shader grouping multiple queries per threadgroup for optimal thread occupancy.
-    - [hybrid_wrapper.py](src/metal/hybrid_wrapper.py): Python wrapper for the Hybrid Metal kernel.
-- 💾 `results/`
-  - `speed_benchmark.png`: Plot comparing computation time across attention variants.
-  - `memory_benchmark.png`: Plot illustrating memory usage scaling (quadratic vs. linear).
-  - `roofline_chart.png`: Roofline model charting arithmetic intensity vs achieved performance.
+The custom kernel is still slower than MLX standard attention, which is expected because MLX uses highly optimized backend kernels. This project focuses on learning and demonstrating the internal mechanics of Flash Attention and GPU optimization.
 
----
+## Why Flash Attention?
 
-## 🛠 Setup & Installation
+Standard attention computes:
 
-Ensure you have a macOS machine with Apple Silicon (M1/M2/M3/M4).
+QK^T
 
-1. Clone or navigate to the repository:
-   ```bash
-   cd flash-attention
-   ```
-2. Activate the virtual environment:
-   ```bash
-   source .venv/bin/activate
-   ```
-3. Run validations or benchmarks.
+This creates an N x N score matrix.
 
----
+For long sequences, this matrix becomes memory-heavy. The GPU spends a lot of time moving the score matrix between memory levels instead of only computing.
 
-## 🧪 Verification & Correctness
+Flash Attention avoids materializing the full score matrix. Instead, it processes keys and values in tiles and updates the softmax online.
 
-To run the correctness validations across all implementations:
-```bash
-PYTHONPATH=. .venv/bin/python3 src/attention/validate.py
-```
+This reduces memory movement and makes attention more hardware-aware.
 
-Expected Output:
-```text
-Max difference: 8.34e-07
-PASS — outputs match
-Flash Attention max difference: 4.17e-07
-PASS
-Metal kernel max difference: 3.87e-07
-PASS
-SIMD Metal kernel max difference: 6.85e-07
-PASS
-Hybrid Metal kernel max difference: 3.58e-07
-PASS
-```
+## Concepts Covered
 
----
+- Scaled dot-product attention
+- Softmax scaling
+- Memory-bound vs compute-bound workloads
+- DRAM vs SRAM/threadgroup memory
+- Online softmax
+- Tiling
+- Custom Metal kernels
+- SIMD lanes
+- Reduction
+- Broadcast
+- Shuffle-based lane communication
+- Benchmark interpretation
 
-## 📊 Performance Benchmark
+## Implementation Journey
 
-To run the performance benchmark:
-```bash
-PYTHONPATH=. .venv/bin/python3 -u src/attention/benchmark.py
-```
+| Version | Idea | Result |
+|---|---|---|
+| Standard Attention | MLX baseline implementation | Fastest due to optimized backend |
+| Python Flash Attention | Tiled attention with online softmax | Correct but slower due to Python-level loops |
+| Basic Metal Kernel | Move computation into Metal | Correct but still scalar/manual |
+| Hybrid Metal Kernel | Use 4 lanes per query token | Correct but reduction and output update bottlenecks remained |
+| Hybrid Shuffle Kernel | Replace SRAM partial reduction with shuffle communication | Faster than hybrid |
+| Parallel O Kernel | Split output vector update across lanes | Large speedup |
+| Cached P Kernel | Cache exp(score - max) per tile | Best custom kernel |
+| Float4 Kernel | Test vectorized K/V loading | Similar performance, not clearly better |
 
-### Empirical Results (MacBook Air M2 8GB)
+## Final Benchmark
 
-Measured execution times (average of 17 runs after 3 warmup runs) for Batch Size $B=1$, Heads $H=8$, Head Dimension $d=64$:
+Latest benchmark on Apple Silicon M2 with 8GB RAM:
 
-| Sequence Length ($N$) | Standard Attention | Flash Attention (Python) | Naive Metal Kernel | Hybrid Metal Kernel | SIMD Metal Kernel | Memory Usage |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **128** | 0.45 ms | 1.74 ms | 4.61 ms | 16.04 ms | 89.82 ms | 0.3 MB |
-| **256** | 0.70 ms | 5.90 ms | 16.52 ms | 58.11 ms | 349.89 ms | 1.0 MB |
-| **512** | 1.38 ms | 27.31 ms | 53.65 ms | 229.28 ms | 1321.24 ms | 4.2 MB |
-| **1024** | 3.43 ms | 97.65 ms | 190.58 ms | 899.72 ms | 5147.25 ms | 16.8 MB |
+| Kernel | N=128 | N=256 | N=512 | N=1024 |
+|---|---:|---:|---:|---:|
+| Standard Attention | 0.34 ms | 0.55 ms | 1.74 ms | 3.45 ms |
+| Flash Attention Python | 1.76 ms | 5.96 ms | 23.05 ms | 92.91 ms |
+| Basic Metal Kernel | 3.93 ms | 14.75 ms | 50.02 ms | 178.78 ms |
+| SIMD Metal Kernel | 86.21 ms | 334.88 ms | 1301.41 ms | 5095.45 ms |
+| Hybrid Metal Kernel | 16.14 ms | 59.82 ms | 228.57 ms | 874.56 ms |
+| Hybrid Shuffle Kernel | 13.51 ms | 47.31 ms | 180.59 ms | 688.58 ms |
+| Parallel O Kernel | 4.74 ms | 15.91 ms | 59.32 ms | 229.37 ms |
+| Cached P Kernel | 2.20 ms | 6.40 ms | 23.07 ms | 88.47 ms |
+| Float4 Kernel | 2.15 ms | 6.43 ms | 23.09 ms | 88.83 ms |
 
-#### Insights & Performance Analysis:
-1. **Standard MLX Attention** is highly optimized. It uses Apple's native, heavily optimized C++ backend libraries, which compile/fuse operators to run at hardware-peak levels (achieving 3.43 ms at $N=1024$).
-2. **Python Flash Attention** incurs considerable loop overhead due to the nested interpreter loops (32 tiles * 32 tiles = 1024 steps per batch/head) in Python, but achieves linear $O(N)$ peak memory scaling.
-3. **Naive Metal Kernel** out-performs the other custom Metal kernels. This is because each query is processed independently per threadgroup, minimizing thread synchronization/barriers.
-4. **SIMD Metal Kernel** suffers from extreme execution divergence. Specifically, only `lane_id == 0` performs the final softmax calculation and `o_reg` updates, leaving the other 31 lanes in the warp idle. Frequent barriers (`threadgroup_barrier`) also contribute to the overhead.
-5. **Hybrid Metal Kernel** groups 8 queries per threadgroup and allocates 4 lanes per query to parallelize dot-products. This reduces the number of threadgroups and achieves a **5.7x speedup** over the SIMD kernel (899.72 ms vs. 5147.25 ms at $N=1024$).
+## Benchmark Interpretation
 
----
+Compared to MLX standard attention, the best custom kernel is still slower:
 
-## 📈 Roofline Model & Arithmetic Intensity
+| N | Cached P vs Standard |
+|---|---:|
+| 128 | 6.51x slower |
+| 256 | 11.69x slower |
+| 512 | 13.23x slower |
+| 1024 | 25.66x slower |
 
-The roofline model is a visual method to identify whether a kernel is **Memory-Bandwidth Bound** or **Compute-Capacity Bound** based on its **Arithmetic Intensity** ($\text{FLOPs/Byte}$).
+Compared to my original hybrid Metal kernel, the best custom kernel is much faster:
 
-To generate the analytical charts:
-```bash
-PYTHONPATH=. .venv/bin/python3 src/attention/roofline.py
-```
+| N | Cached P vs Hybrid |
+|---|---:|
+| 128 | 7.32x faster |
+| 256 | 9.35x faster |
+| 512 | 9.91x faster |
+| 1024 | 9.89x faster |
 
-### Analysis details (for $N=1024$, $H=8$, $B=1$, $d=64$):
-- **Total FLOPs**: $2 \times 2 \times N^2 \times d \times H = 1,073,741,824$ (1.07 GFLOPs)
-- **Standard Attention DRAM Traffic**: Scores matrix is read/written multiple times ($4 \times H \times N^2 \times 2 \text{ bytes} = 67,108,864$ bytes)
-  - **Arithmetic Intensity**: $32.0 \text{ FLOPs/byte}$
-  - **Bottleneck**: Memory-Bound. The large intermediate score matrix forces repeated DRAM round-trips.
-- **Flash Attention DRAM Traffic**: Intermediate score matrix is kept entirely in on-chip SRAM; only $Q$, $K$, $V$, and $O$ are read/written once ($4 \times H \times N \times d \times 2 \text{ bytes} = 4,194,304$ bytes)
-  - **Arithmetic Intensity**: $512.0 \text{ FLOPs/byte}$ ($16\times$ improvement!)
-  - **Bottleneck**: Compute-Bound. The kernel is limited by the processor's raw floating-point throughput, not memory latency.
+## Key Optimizations
 
-These charts are saved in the `results/` folder:
-- **Speed Comparison Plot**: `results/speed_benchmark.png`
-- **Memory Scaling Plot**: `results/memory_benchmark.png`
-- **Roofline Boundary Chart**: `results/roofline_chart.png`
+### 1. Shuffle Reduction
+
+The first hybrid kernel used threadgroup memory to store partial dot products. This required extra memory traffic and barriers.
+
+I replaced this with shuffle-based lane communication, allowing lanes to exchange register values directly.
+
+This reduced synchronization and improved performance.
+
+### 2. Parallel Output Update
+
+In the earlier hybrid kernel, one leader lane computed the softmax state and updated all 64 output dimensions.
+
+I changed the mapping so 4 lanes split the output vector update.
+
+For d = 64:
+
+- Lane 0 updates dimensions 0, 4, 8, ...
+- Lane 1 updates dimensions 1, 5, 9, ...
+- Lane 2 updates dimensions 2, 6, 10, ...
+- Lane 3 updates dimensions 3, 7, 11, ...
+
+This removed a major serial bottleneck.
+
+### 3. Cached Softmax Probability
+
+The output update repeatedly computed:
+
+exp(score - max)
+
+inside the inner loop.
+
+I cached this value as:
+
+p[j] = exp(score[j] - max)
+
+Then reused p[j] across output dimensions.
+
+This avoided repeated expensive exponential calls and became the best custom kernel.
+
+### 4. Float4 Loading Experiment
+
+I also tested float4 vectorized loading for K/V tiles.
+
+The idea was to load 4 floats at once instead of scalar values.
+
+However, because the kernel immediately unpacked float4 values back into scalar threadgroup memory, the full data path was not vectorized.
+
+As a result, Float4 was not clearly better than Cached P.
+
+## Why MLX Standard Attention Is Still Faster
+
+Flash Attention is a better memory-aware algorithm, but algorithmic improvement alone does not guarantee faster runtime.
+
+MLX standard attention is backed by highly optimized kernels for matrix multiplication and tensor operations.
+
+My custom kernel is educational and still uses:
+
+- manual scalar loops
+- custom softmax logic
+- threadgroup memory loading
+- explicit synchronization
+- limited vectorized compute
+- no production-level hardware tuning
+
+So the correct conclusion is not that Flash Attention is bad.
+
+The correct conclusion is:
+
+My educational Metal implementation demonstrates the algorithm and improves significantly through optimization, but it is not yet as optimized as MLX backend kernels.
+
+## What I Learned
+
+- A better algorithm can still lose to a better implementation.
+- Memory movement can dominate GPU runtime.
+- Correctness is only the first step in GPU programming.
+- Reduction can become a bottleneck.
+- Thread mapping strongly affects performance.
+- One overloaded lane can slow the whole kernel.
+- Expensive operations should not be repeated inside inner loops.
+- Every optimization must be measured.
+- Benchmark wording should be honest and clear.
+
+## Next Steps
+
+Possible future improvements:
+
+- Profile kernels using Xcode GPU tools
+- Test float16
+- Reduce threadgroup memory pressure
+- Explore Metal matrix primitives
+- Improve vectorized compute path
+- Experiment with larger sequence lengths carefully within 8GB memory limits

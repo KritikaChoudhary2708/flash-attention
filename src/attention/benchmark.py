@@ -20,6 +20,11 @@ def benchmark_attention(fn, B=1, H=8, seq_lens=[128, 256, 512, 1024], d= 64, n_r
                     print(f"N={N:5d} | {avg_ms:.2f} ms | {memory_mb:.1f} MB")
           return results
 
+def describe_ratio(reference_ms, candidate_ms):
+    if candidate_ms < reference_ms:
+        return f"{reference_ms / candidate_ms:.2f}x faster"
+    return f"{candidate_ms / reference_ms:.2f}x slower"
+
 if __name__ == "__main__":
     from src.attention.standard_attention import standard_attention
     from src.attention.flash_attention import flash_attention_forward
@@ -50,17 +55,19 @@ if __name__ == "__main__":
     hybrid_shuffle_parallel_o_cached_p_results = benchmark_attention(metal_flash_attention_hybrid_shuffle_parallel_o_cached_p)
     print("\n=== Hybrid Metal Shuffle Parallel O Cached P Float4 Kernel ===")
     hybrid_shuffle_parallel_o_cached_p_float4_results = benchmark_attention(metal_flash_attention_hybrid_shuffle_parallel_o_cached_p_float4)
-    # print("\n=== Speedup ===")
-    # for N in std_results:
-    #     metal_speedup = std_results[N]['time_ms'] / metal_results[N]['time_ms']
-    #     print(f"N={N:5d}: {metal_speedup:.2f}x faster")
-    #     simd_speedup = std_results[N]['time_ms'] / simd_results[N]['time_ms']
-    #     print(f"N={N:5d}: {simd_speedup:.2f}x faster")
-    #     hybrid_speedup = std_results[N]['time_ms'] / hybrid_results[N]['time_ms']
-    #     print(f"N={N:5d}: {hybrid_speedup:.2f}x faster")
-    #     hybrid_shuffle_speedup = std_results[N]['time_ms'] / hybrid_shuffle_results[N]['time_ms']
-    #     print(f"N={N:5d}: {hybrid_shuffle_speedup:.2f}x faster")
-    #     hybrid_shuffle_parallel_o_speedup = std_results[N]['time_ms'] / hybrid_shuffle_parallel_o_results[N]['time_ms']
-    #     print(f"N={N:5d}: {hybrid_shuffle_parallel_o_speedup:.2f}x faster")
-    #     hybrid_shuffle_parallel_o_cached_p_speedup = std_results[N]['time_ms'] / hybrid_shuffle_parallel_o_cached_p_results[N]['time_ms']
-    #     print(f"N={N:5d}: {hybrid_shuffle_parallel_o_cached_p_speedup:.2f}x faster")
+    
+    sequence_lengths = sorted(flash_results.keys())
+
+    print("=== Compared to Standard Attention ===")
+    for N in std_results:
+        print(
+            f"N={N:5d} | Cached P is "
+            f"{describe_ratio(std_results[N]['time_ms'], hybrid_shuffle_parallel_o_cached_p_results[N]['time_ms'])} than standard"
+        )
+
+    print("=== Custom Kernel Progress ===")
+    for N in sequence_lengths:
+        print(
+            f"N={N:5d} | Cached P is "
+            f"{describe_ratio(hybrid_results[N]['time_ms'], hybrid_shuffle_parallel_o_cached_p_results[N]['time_ms'])} than hybrid"
+        )

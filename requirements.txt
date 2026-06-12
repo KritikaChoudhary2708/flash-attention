@@ -1,0 +1,6 @@
+mlx
+mlx-lm
+numpy
+matplotlib
+jupyter
+memory-profiler
