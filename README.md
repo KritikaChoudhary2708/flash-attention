@@ -10,13 +10,28 @@ The best custom kernel improved from 874.56 ms to 88.47 ms at sequence length 10
 
 The custom kernel is still slower than MLX standard attention, which is expected because MLX uses highly optimized backend kernels. This project focuses on learning and demonstrating the internal mechanics of Flash Attention and GPU optimization.
 
+## Quick Start
+
+This project is designed for Apple Silicon because it uses MLX and custom Metal kernels.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+python3 -m src.attention.validate
+python3 -m src.attention.benchmark
+```
+
 ## Why Flash Attention?
 
 Standard attention computes:
 
+```text
 QK^T
+```
 
-This creates an N x N score matrix.
+This creates an `N x N` score matrix.
 
 For long sequences, this matrix becomes memory-heavy. The GPU spends a lot of time moving the score matrix between memory levels instead of only computing.
 
@@ -39,6 +54,24 @@ This reduces memory movement and makes attention more hardware-aware.
 - Shuffle-based lane communication
 - Benchmark interpretation
 
+## Repository Structure
+
+```text
+src/attention/
+  standard_attention.py      # MLX standard attention baseline
+  online_softmax.py          # Online softmax implementation
+  flash_attention.py         # Python tiled Flash Attention
+  validate.py                # Correctness validation
+  benchmark.py               # Runtime benchmark comparison
+
+src/metal/
+  *.metal                    # Custom Metal kernels
+  *_wrapper.py               # MLX wrappers for Metal kernels
+
+results/
+  benchmark charts and visual outputs
+```
+
 ## Implementation Journey
 
 | Version | Idea | Result |
@@ -49,8 +82,22 @@ This reduces memory movement and makes attention more hardware-aware.
 | Hybrid Metal Kernel | Use 4 lanes per query token | Correct but reduction and output update bottlenecks remained |
 | Hybrid Shuffle Kernel | Replace SRAM partial reduction with shuffle communication | Faster than hybrid |
 | Parallel O Kernel | Split output vector update across lanes | Large speedup |
-| Cached P Kernel | Cache exp(score - max) per tile | Best custom kernel |
+| Cached P Kernel | Cache `exp(score - max)` per tile | Best custom kernel |
 | Float4 Kernel | Test vectorized K/V loading | Similar performance, not clearly better |
+
+## Current Best Custom Kernel
+
+The best custom kernel is:
+
+`Hybrid Metal Shuffle Parallel O Cached P`
+
+This version combines:
+
+- shuffle-based reduction
+- parallel output-vector update
+- cached softmax probabilities
+
+It is still slower than MLX standard attention, but it is around 9.89x faster than my original hybrid Metal kernel at `N=1024`.
 
 ## Final Benchmark
 
@@ -104,7 +151,7 @@ In the earlier hybrid kernel, one leader lane computed the softmax state and upd
 
 I changed the mapping so 4 lanes split the output vector update.
 
-For d = 64:
+For `d = 64`:
 
 - Lane 0 updates dimensions 0, 4, 8, ...
 - Lane 1 updates dimensions 1, 5, 9, ...
@@ -117,27 +164,31 @@ This removed a major serial bottleneck.
 
 The output update repeatedly computed:
 
+```text
 exp(score - max)
+```
 
 inside the inner loop.
 
 I cached this value as:
 
+```text
 p[j] = exp(score[j] - max)
+```
 
-Then reused p[j] across output dimensions.
+Then reused `p[j]` across output dimensions.
 
 This avoided repeated expensive exponential calls and became the best custom kernel.
 
 ### 4. Float4 Loading Experiment
 
-I also tested float4 vectorized loading for K/V tiles.
+I also tested `float4` vectorized loading for K/V tiles.
 
 The idea was to load 4 floats at once instead of scalar values.
 
-However, because the kernel immediately unpacked float4 values back into scalar threadgroup memory, the full data path was not vectorized.
+However, because the kernel immediately unpacked `float4` values back into scalar threadgroup memory, the full data path was not vectorized.
 
-As a result, Float4 was not clearly better than Cached P.
+As a result, `float4` was not clearly better than Cached P.
 
 ## Why MLX Standard Attention Is Still Faster
 
@@ -159,6 +210,13 @@ So the correct conclusion is not that Flash Attention is bad.
 The correct conclusion is:
 
 My educational Metal implementation demonstrates the algorithm and improves significantly through optimization, but it is not yet as optimized as MLX backend kernels.
+
+## Limitations
+
+- The custom Metal kernels currently assume `d = 64`.
+- Benchmarks are run on Apple Silicon M2 with 8GB RAM.
+- Results may vary depending on thermals and background load.
+- The goal is educational GPU kernel understanding, not production replacement for MLX kernels.
 
 ## What I Learned
 
